@@ -1,0 +1,96 @@
+# Explicit project name. Without it Compose derives the project from the
+# directory name, which collides with the unrelated stack in
+# /DATA/docker/teacher-ai-platform and adopts its containers.
+name: teacherai-school
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-teacherai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-teacherai}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-teacherai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    volumes:
+      - redisdata:/data
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-teacherai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-teacherai}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
+      TEXT_MODEL: ${TEXT_MODEL:-gpt-5.6-terra}
+      CHEAP_TEXT_MODEL: ${CHEAP_TEXT_MODEL:-gpt-5.6-luna}
+      IMAGE_MODEL: ${IMAGE_MODEL:-gpt-image-1}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@school.local}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?set SEED_ADMIN_PASSWORD in .env}
+      DEFAULT_MONTHLY_ALLOCATION_CENTS: ${DEFAULT_MONTHLY_ALLOCATION_CENTS:-500}
+      CORS_ORIGINS: ${PUBLIC_URL:-http://localhost}
+      ENVIRONMENT: production
+      # Nexum Router (Dialagram) proxy for Qwen models. Optional; if unset the
+      # picker's Qwen tile is hidden and the backend never routes there.
+      NEXUM_API_KEY: ${NEXUM_API_KEY:-}
+      NEXUM_BASE_URL: ${NEXUM_BASE_URL:-https://dialagram.me/router/v1}
+    volumes:
+      - mediadata:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      # Startup runs migrations before serving, so "container started" is not
+      # the same as "ready". start_period covers that without failing the check.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      # Loopback only: aaPanel nginx terminates TLS and proxies in.
+      - "127.0.0.1:${HTTP_PORT:-8300}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
+  mediadata:
+
+networks:
+  # The daemon's default address pools are fully subnetted on this host
+  # (39 networks), so this project pins its own free range explicitly.
+  default:
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24

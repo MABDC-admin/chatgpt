@@ -1,0 +1,30 @@
+# Secrets and deployment state
+.env
+.env.*
+!.env.example
+
+# Runtime files and generated artifacts
+data/
+uploads/
+images/
+knowledge/
+pptx/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Node and Next.js
+node_modules/
+.next/
+out/
+
+# Local editor files
+.DS_Store
+.idea/
+.vscode/

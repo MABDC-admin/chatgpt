@@ -1,0 +1,225 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #f8fafc;
+  --color-foreground: #111827;
+  --color-muted: #6b7280;
+  --color-muted-foreground: #6b7280;
+  --color-border: #e5e7eb;
+  --color-input: #f3f4f6;
+  --color-ring: #059669;
+  --color-primary: #059669;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f0fdf4;
+  --color-secondary-foreground: #111827;
+  --color-accent: #ecfdf5;
+  --color-accent-foreground: #065f46;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+  --color-card: #ffffff;
+  --color-card-foreground: #111827;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #111827;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+
+@layer base {
+  * {
+    @apply border-border box-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+}
+
+/* Dark mode overrides */
+.dark {
+  --color-background: #0a0a0a;
+  --color-foreground: #fafafa;
+  --color-muted: #a1a1aa;
+  --color-muted-foreground: #a1a1aa;
+  --color-border: #27272a;
+  --color-input: #18181b;
+  --color-ring: #34d399;
+  --color-primary: #34d399;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #1a1a2e;
+  --color-secondary-foreground: #fafafa;
+  --color-accent: #064e3b;
+  --color-accent-foreground: #6ee7b7;
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+  --color-card: #0a0a0a;
+  --color-card-foreground: #fafafa;
+  --color-popover: #0a0a0a;
+  --color-popover-foreground: #fafafa;
+}
+
+/* =========================================================================
+   Markdown / GFM rendering for AI responses.
+   Rendered by components/Markdown.tsx with react-markdown + remark-gfm +
+   rehype-sanitize + rehype-highlight. Everything below styles the DOM that
+   pipeline produces.
+   ========================================================================= */
+.prose-chat {
+  @apply text-[15.5px] leading-relaxed break-words;
+}
+.prose-chat > *:first-child { margin-top: 0; }
+.prose-chat > *:last-child  { margin-bottom: 0; }
+
+.prose-chat p            { @apply mb-3.5; }
+.prose-chat strong       { @apply font-semibold text-foreground; }
+.prose-chat em           { @apply text-foreground; }
+.prose-chat del          { @apply text-muted-foreground line-through; }
+.prose-chat mark {
+  background: color-mix(in oklch, var(--color-primary) 15%, transparent);
+  color: var(--color-primary);
+  @apply px-1 rounded;
+}
+
+/* Heading hierarchy.
+   Colours come from primary/accent tokens so they follow the theme -- amber
+   never looks right in light mode. Each level is visually distinct enough to
+   scan without being loud. */
+.prose-chat h1, .prose-chat h2, .prose-chat h3, .prose-chat h4 {
+  @apply font-semibold leading-tight tracking-tight;
+}
+.prose-chat h1 {
+  @apply text-2xl mt-6 mb-3 pb-2 border-b border-border text-foreground;
+}
+.prose-chat h2 {
+  @apply text-xl mt-5 mb-2.5 text-primary;
+}
+.prose-chat h3 {
+  @apply text-lg mt-4 mb-2 text-accent-foreground;
+}
+.prose-chat h4 {
+  @apply text-sm mt-3 mb-1.5 text-muted-foreground uppercase tracking-wider;
+}
+.prose-chat h1:first-child,
+.prose-chat h2:first-child,
+.prose-chat h3:first-child { margin-top: 0.25rem; }
+
+/* Lists. Match line spacing to prose so a mixed message reads as one block. */
+.prose-chat ul, .prose-chat ol { @apply mb-3.5 pl-6; }
+.prose-chat li { @apply my-1; }
+.prose-chat li > ul, .prose-chat li > ol { @apply my-1; }
+.prose-chat li > p { @apply mb-1; }
+.prose-chat ul { list-style-type: disc; }
+.prose-chat ul ul { list-style-type: circle; }
+.prose-chat ul ul ul { list-style-type: square; }
+
+/* GFM task lists -- render the checkbox as a real, coloured tick. */
+.prose-chat li.task-list-item {
+  @apply list-none -ml-5 pl-6 relative;
+}
+.prose-chat li.task-list-item input[type="checkbox"] {
+  @apply absolute left-0 top-1.5 h-4 w-4 m-0 pointer-events-none accent-primary;
+}
+
+/* Blockquote: coloured bar plus soft tint, reads as an aside. */
+.prose-chat blockquote {
+  @apply my-3 py-1.5 px-3.5 border-l-[3px] italic text-muted-foreground rounded;
+  border-left-color: var(--color-primary);
+  background: color-mix(in oklch, var(--color-primary) 6%, transparent);
+}
+.prose-chat blockquote p:last-child { margin-bottom: 0; }
+
+/* Inline code and code blocks. */
+.prose-chat code {
+  @apply font-mono text-[0.88em] bg-secondary px-1.5 py-0.5 rounded;
+  color: var(--color-primary);
+}
+.prose-chat pre {
+  @apply my-3 p-3.5 border border-border rounded-lg overflow-x-auto text-[13.5px] leading-relaxed;
+  background: #1a1a1a;
+}
+.dark .prose-chat pre { background: #0d0d0d; }
+.prose-chat pre code {
+  @apply bg-transparent p-0 rounded-none;
+  color: #e5e7eb;
+}
+
+/* highlight.js token colours -- restrained on dark, adequate on light. */
+.prose-chat .hljs-keyword,
+.prose-chat .hljs-tag       { color: #c792ea; }
+.prose-chat .hljs-string,
+.prose-chat .hljs-attr      { color: #a5d6a7; }
+.prose-chat .hljs-number,
+.prose-chat .hljs-literal   { color: #ffcb6b; }
+.prose-chat .hljs-comment   { color: #6a737d; font-style: italic; }
+.prose-chat .hljs-function,
+.prose-chat .hljs-title     { color: #82aaff; }
+.prose-chat .hljs-built_in,
+.prose-chat .hljs-name      { color: #f78c6c; }
+
+/* Links: coloured, dashed underline, external ones get a small arrow. */
+.prose-chat a {
+  @apply text-primary underline decoration-dashed underline-offset-2 hover:decoration-solid;
+}
+.prose-chat a[target="_blank"]::after {
+  content: " ↗";
+  @apply text-xs text-muted-foreground;
+}
+
+/* Tables. Wrapped in .md-table-wrap by the Markdown component so wide tables
+   scroll instead of blowing up the message column. */
+.prose-chat .md-table-wrap {
+  @apply my-3 overflow-x-auto border border-border rounded-lg;
+}
+.prose-chat table {
+  @apply w-full border-collapse text-sm min-w-[400px];
+}
+.prose-chat th, .prose-chat td {
+  @apply text-left py-2.5 px-3.5 border-b border-border align-top;
+}
+.prose-chat thead th {
+  @apply bg-secondary text-primary font-semibold text-xs uppercase tracking-wider;
+}
+.prose-chat tbody tr:nth-child(2n) td {
+  background: color-mix(in oklch, var(--color-secondary) 40%, transparent);
+}
+.prose-chat tbody tr:last-child td { border-bottom: none; }
+
+.prose-chat hr { @apply border-none border-t border-border my-5; }
+
+.prose-chat kbd {
+  @apply inline-block px-1.5 py-0.5 font-mono text-xs bg-secondary border border-border rounded shadow-sm;
+}
+.prose-chat sup, .prose-chat sub { font-size: 0.72em; }
+
+/* Inline illustrations: :icon:name: shortcodes.
+   Rendered by the component as <span class="md-icon"><svg .../></span>. Size
+   follows the surrounding text; colour follows currentColor so an icon inside
+   a heading takes on that heading's tint. */
+.prose-chat .md-icon {
+  @apply inline-flex items-center justify-center align-[-0.2em];
+  width: 1.15em;
+  height: 1.15em;
+  margin: 0 2px;
+  color: var(--color-primary);
+}
+.prose-chat h1 .md-icon,
+.prose-chat h2 .md-icon,
+.prose-chat h3 .md-icon { color: inherit; }
+.prose-chat .md-icon svg { width: 100%; height: 100%; }
+
+/* Two-column layout the model can invoke with ::: columns / ::: containers.
+   Handled by the component; on narrow screens it stacks. */
+.prose-chat .md-columns {
+  @apply grid gap-4 my-4;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 640px) {
+  .prose-chat .md-columns { grid-template-columns: 1fr 1fr; }
+}
+.prose-chat .md-columns > * > *:first-child { margin-top: 0; }
+.prose-chat .md-columns > * > *:last-child  { margin-bottom: 0; }
+
+/* When Markdown is streaming, whitespace is already structural. */
+.message.assistant .bubble { white-space: normal; }
+.message.assistant .bubble > .pending { white-space: pre-wrap; font-style: italic; opacity: 0.7; }
