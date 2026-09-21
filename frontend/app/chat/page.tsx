@@ -26,7 +26,7 @@ import { streamChat } from "@/lib/stream";
 import { cn } from "@/lib/utils";
 import ImageModelPicker from "@/components/ImageModelPicker";
 import TextModelPicker, { type ReasoningEffort, type TextMode } from "@/components/TextModelPicker";
-import { AlertCircle, Paperclip, ArrowUp, Square, X, FileText, Image as ImageIcon, Table as TableIcon, Sparkles, Plus, Copy, Check, RotateCcw, Pencil } from "lucide-react";
+import { AlertCircle, Paperclip, ArrowUp, Square, X, FileText, Image as ImageIcon, Table as TableIcon, Sparkles, MessageCirclePlus, Copy, Check, RotateCcw, Pencil } from "lucide-react";
 
 const ATTACHMENT_ICONS: Record<string, typeof FileText> = {
   pdf: FileText,
@@ -231,6 +231,14 @@ export default function ChatPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not open that conversation");
     }
+  }
+
+  function startNewChat() {
+    abortRef.current?.abort();
+    setDraft("");
+    setAttachments([]);
+    void openConversation(null);
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
   }
 
   async function onPickFiles(files: FileList | null) {
@@ -508,7 +516,7 @@ export default function ChatPage() {
         credits={credits}
         conversations={conversations}
         activeId={activeId}
-        onSelect={(id) => void openConversation(id)}
+        onSelect={(id) => id === null ? startNewChat() : void openConversation(id)}
         onSearch={searchConversations}
         onRename={(id, title) => void renameConversation(id, title)}
         onArchive={(id) => void archiveConversation(id)}
@@ -516,8 +524,17 @@ export default function ChatPage() {
       />
 
       <main className="flex flex-1 flex-col min-w-0 relative">
-        {/* Top bar controls */}
-        <div className="flex items-center gap-3 px-4 py-2.5 border-b border-emerald-100 bg-white flex-wrap md:pl-6">
+        {/* Compact command bar: chat controls remain visible when the sidebar is closed. */}
+        <div className="flex items-center gap-2 border-b border-emerald-100 bg-white px-4 py-2.5 md:px-6">
+          <div className="hidden min-w-0 items-center gap-2 pr-2 sm:flex">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-sky-100 bg-sky-50 text-sky-700">
+              <Sparkles className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-[#1f2937]">MABDC Chat</p>
+              <p className="text-[11px] text-[#6b7280]">School workspace</p>
+            </div>
+          </div>
           <TextModelPicker
             mode={textMode}
             reasoningEffort={reasoningEffort}
@@ -551,7 +568,7 @@ export default function ChatPage() {
             }}
           />
 
-          <label className="inline-flex items-center gap-2 text-sm text-[#6b7280] cursor-pointer select-none ml-auto">
+          <label className="ml-auto hidden cursor-pointer select-none items-center gap-2 text-sm text-[#6b7280] lg:inline-flex">
             <input
               type="checkbox"
               checked={useKnowledge}
@@ -561,22 +578,49 @@ export default function ChatPage() {
             <BookOpenIcon className="h-3.5 w-3.5" />
             Knowledge base
           </label>
+          <button
+            type="button"
+            onClick={startNewChat}
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
+            title="Start a new chat"
+          >
+            <MessageCirclePlus className="h-4 w-4" />
+            <span className="hidden sm:inline">New chat</span>
+          </button>
         </div>
 
         {/* Messages area */}
         <div className="flex-1 overflow-y-auto py-6">
           {messages.length === 0 && (
-            <div className="mx-auto max-w-3xl px-6 flex flex-col items-center justify-center h-full text-center space-y-4">
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-50 border border-emerald-100">
-                <Sparkles className="h-7 w-7 text-emerald-600" />
+            <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center px-6 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-emerald-100 bg-emerald-50">
+                <Sparkles className="h-6 w-6 text-emerald-600" />
               </div>
-              <div className="space-y-2">
-                <h2 className="text-lg font-semibold text-[#1f2937]">How can I help you today?</h2>
-                <p className="text-sm text-[#6b7280] max-w-md">
-                  Ask me to plan a lesson, draft an assessment, or explain a topic.
-                  Or describe an image and I&apos;ll create it here. Once an image exists
-                  you can say what to change.
+              <div className="mt-4 space-y-1.5">
+                <h2 className="text-xl font-semibold text-[#1f2937]">What are we working on?</h2>
+                <p className="max-w-md text-sm leading-relaxed text-[#6b7280]">
+                  Plan, explain, create, or work from a document in the shared knowledge base.
                 </p>
+              </div>
+              <div className="mt-6 grid w-full max-w-2xl gap-2 text-left sm:grid-cols-3">
+                {[
+                  ["Plan a lesson", "Create a differentiated lesson plan for..."],
+                  ["Explain a topic", "Explain this topic at a Grade 6 level: ..."],
+                  ["Create a visual", "Create an educational visual about..."],
+                ].map(([label, prompt]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => {
+                      setDraft(prompt);
+                      window.setTimeout(() => textareaRef.current?.focus(), 0);
+                    }}
+                    className="rounded-lg border border-gray-200 bg-white px-3 py-3 text-left transition-colors hover:border-emerald-300 hover:bg-emerald-50"
+                  >
+                    <span className="block text-sm font-medium text-[#1f2937]">{label}</span>
+                    <span className="mt-1 block text-xs leading-relaxed text-[#6b7280]">{prompt}</span>
+                  </button>
+                ))}
               </div>
             </div>
           )}
@@ -785,9 +829,9 @@ export default function ChatPage() {
             </div>
           )}
           <div className="mx-auto max-w-3xl">
-            {/* Style Preset Chips */}
-            <div className="mb-2 flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-[#6b7280] shrink-0">Styles:</span>
+            {/* Image-oriented prompt helpers stay compact until the user needs them. */}
+            <div className="mb-2 flex items-center gap-2 overflow-x-auto pb-0.5">
+              <span className="shrink-0 text-xs text-[#6b7280]">Image styles</span>
               
               <button
                 type="button"
@@ -920,15 +964,6 @@ export default function ChatPage() {
             </p>
           </div>
         </div>
-        {/* Floating New Chat button */}
-        <button
-          onClick={() => void openConversation(null)}
-          className="fixed bottom-6 right-6 z-30 inline-flex h-14 w-14 items-center justify-center rounded-full bg-emerald-600 text-white shadow-lg hover:bg-emerald-700 hover:shadow-xl transition-all hover:scale-105 active:scale-95"
-          title="New chat"
-          aria-label="Start a new chat"
-        >
-          <Plus className="h-6 w-6" />
-        </button>
       </main>
     </div>
   );
