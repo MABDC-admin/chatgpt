@@ -180,6 +180,28 @@ async def chat(
     attachments = await _load_attachments(db, payload.attachment_ids, user.id)
     uploaded_images = [a for a in attachments if a.kind == "image"]
 
+    text_route = ai.resolve_text_route(
+        payload.message,
+        mode=payload.mode,
+        reasoning_effort=payload.reasoning_effort,
+    )
+    # Keep existing clients working while the frontend moves from raw provider
+    # IDs to the purpose-based picker above.
+    if payload.model in (
+        settings.cheap_text_model,
+        settings.text_model,
+        settings.pro_text_model,
+    ) and payload.mode == "auto":
+        legacy_model = ai.route_text_model(payload.message, payload.model)
+        legacy_label = {
+            settings.cheap_text_model: "Luna",
+            settings.text_model: "Thinking",
+            settings.pro_text_model: "Pro",
+        }[legacy_model]
+        text_route = ai.TextRoute(
+            legacy_model, text_route.reasoning_effort, legacy_label
+        )
+
     history: list[dict] = []
     last_image_url: str | None = None
     is_new_conversation = False
@@ -202,7 +224,7 @@ async def chat(
     else:
         convo = Conversation(
             user_id=user.id,
-            model=ai.route_text_model(payload.message, payload.model),
+            model=text_route.model,
             # Provisional: replaced with an AI-written title once the turn
             # finishes, so the sidebar has a label immediately either way.
             title=payload.message[:60].strip() or "New chat",
@@ -368,13 +390,12 @@ async def chat(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # Attachments override length-based routing: a short question over a long
-    # PDF or an image is a heavyweight task, however few words the user typed.
-    if attachments and payload.model is None:
-        text_model = settings.text_model
-    else:
-        text_model = ai.route_text_model(payload.message, payload.model)
-    convo.model = text_model
+    # Attachments override automatic routing: a short question over a long PDF
+    # or an image still deserves the stronger model. An explicit picker choice
+    # always remains the user's choice.
+    if attachments and payload.model is None and payload.mode == "auto":
+        text_route = ai.TextRoute(settings.text_model, "high", "Thinking")
+    convo.model = text_route.model
 
     # RAG: pull relevant context from the school knowledge base.
     rag_context = ""
@@ -416,7 +437,7 @@ async def chat(
             _dbg.info("messages[%d] role=%s text_len=%d", i, msg["role"], len(str(c)))
     return StreamingResponse(
         _text_turn(
-            messages, text_model, conversation_id, user_id,
+            messages, text_route, conversation_id, user_id,
             title_from=payload.message if is_new_conversation else None,
         ),
         media_type="text/event-stream",
@@ -476,12 +497,22 @@ async def _persist_and_bill(
 
 async def _text_turn(
     messages: list[dict],
-    model: str,
+    route: ai.TextRoute,
     conversation_id: uuid.UUID,
     user_id: uuid.UUID,
     title_from: str | None = None,
 ) -> AsyncIterator[str]:
-    yield _sse("start", {"conversation_id": str(conversation_id), "model": model, "kind": "text"})
+    model = route.model
+    yield _sse(
+        "start",
+        {
+            "conversation_id": str(conversation_id),
+            "model": model,
+            "mode_label": route.label,
+            "reasoning_effort": route.reasoning_effort,
+            "kind": "text",
+        },
+    )
 
     chunks: list[str] = []
     prompt_tokens = completion_tokens = 0
@@ -490,6 +521,9 @@ async def _text_turn(
             stream = await ai.client.chat.completions.create(
                 model=model, messages=messages, stream=True,
                 stream_options={"include_usage": True},
+                **ai.completion_kwargs(
+                    model, reasoning_effort=route.reasoning_effort
+                ),
             )
             async for event in stream:
                 if event.usage:

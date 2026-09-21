@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     openai_api_key: str
     text_model: str = "gpt-5.6-terra"
     cheap_text_model: str = "gpt-5.6-luna"
+    pro_text_model: str = "gpt-5.6-sol"
     image_model: str = "gpt-image-1"
     embedding_model: str = "text-embedding-3-small"
 

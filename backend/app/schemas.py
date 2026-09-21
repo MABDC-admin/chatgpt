@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -100,7 +101,11 @@ class ConversationDetail(ConversationOut):
 class ChatRequest(BaseModel):
     conversation_id: uuid.UUID | None = None
     message: str = Field(min_length=1, max_length=32000)
+    # `model` remains for older clients. New clients select a purpose-driven
+    # route rather than needing to know provider model IDs.
     model: str | None = None
+    mode: Literal["auto", "luna", "terra", "sol"] = "auto"
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
     use_knowledge_base: bool = False
     attachment_ids: list[uuid.UUID] = []
     # Applied when the turn is routed to image generation or editing.

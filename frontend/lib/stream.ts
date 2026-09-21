@@ -63,7 +63,13 @@ export async function streamTool(
 }
 
 type StreamHandlers = {
-  onStart?: (data: { conversation_id: string; model: string; kind?: string }) => void;
+  onStart?: (data: {
+    conversation_id: string;
+    model: string;
+    kind?: string;
+    mode_label?: string;
+    reasoning_effort?: "low" | "medium" | "high";
+  }) => void;
   onDelta: (text: string) => void;
   onStatus?: (message: string) => void;
   onImage?: (data: { url: string; caption: string; edited: boolean }) => void;
@@ -88,6 +94,8 @@ export async function streamChat(
     message: string;
     conversation_id?: string | null;
     model?: string | null;
+    mode?: "auto" | "luna" | "terra" | "sol";
+    reasoning_effort?: "low" | "medium" | "high";
     size?: string;
     quality?: string;
     image_model?: string;

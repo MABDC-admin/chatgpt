@@ -1,6 +1,7 @@
 """Thin wrapper over the OpenAI client plus the cost-optimisation router."""
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -19,13 +20,44 @@ _HEAVY_HINTS = re.compile(
 )
 
 
+_REASONING_EFFORTS = {"low", "medium", "high"}
+
+
+@dataclass(frozen=True)
+class TextRoute:
+    model: str
+    reasoning_effort: str
+    label: str
+
+
+def resolve_text_route(
+    prompt: str,
+    *,
+    mode: str | None = None,
+    reasoning_effort: str | None = None,
+) -> TextRoute:
+    """Resolve a user-selected route without exposing provider model IDs in the UI."""
+    requested_mode = (mode or "auto").strip().lower()
+    requested_effort = (reasoning_effort or "").strip().lower()
+    effort = requested_effort if requested_effort in _REASONING_EFFORTS else None
+
+    if requested_mode == "luna":
+        return TextRoute(settings.cheap_text_model, effort or "medium", "Luna")
+    if requested_mode == "terra":
+        return TextRoute(settings.text_model, effort or "high", "Thinking")
+    if requested_mode == "sol":
+        return TextRoute(settings.pro_text_model, effort or "high", "Pro")
+
+    if len(prompt) < 280 and not _HEAVY_HINTS.search(prompt):
+        return TextRoute(settings.cheap_text_model, effort or "medium", "Auto")
+    return TextRoute(settings.text_model, effort or "medium", "Auto")
+
+
 def route_text_model(prompt: str, requested: str | None = None) -> str:
     """Pick a text model. An explicit, known request always wins."""
-    if requested in (settings.text_model, settings.cheap_text_model):
+    if requested in (settings.text_model, settings.cheap_text_model, settings.pro_text_model):
         return requested
-    if len(prompt) < 280 and not _HEAVY_HINTS.search(prompt):
-        return settings.cheap_text_model
-    return settings.text_model
+    return resolve_text_route(prompt).model
 
 
 _PROMPT_FILE = Path(__file__).resolve().parent.parent / "prompts" / "system_prompt.txt"
@@ -94,7 +126,11 @@ def _supports_legacy_params(model: str) -> bool:
 
 
 def completion_kwargs(
-    model: str, *, max_output: int | None = None, deterministic: bool = False
+    model: str,
+    *,
+    max_output: int | None = None,
+    deterministic: bool = False,
+    reasoning_effort: str | None = None,
 ) -> dict:
     """Build per-model kwargs so one call site works across model generations.
 
@@ -112,6 +148,8 @@ def completion_kwargs(
         kwargs[key] = max_output
     if deterministic and _supports_legacy_params(model):
         kwargs["temperature"] = 0
+    if reasoning_effort in _REASONING_EFFORTS and model.startswith("gpt-5"):
+        kwargs["reasoning_effort"] = reasoning_effort
     return kwargs
 
 

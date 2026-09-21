@@ -25,6 +25,7 @@ import {
 import { streamChat } from "@/lib/stream";
 import { cn } from "@/lib/utils";
 import ImageModelPicker from "@/components/ImageModelPicker";
+import TextModelPicker, { type ReasoningEffort, type TextMode } from "@/components/TextModelPicker";
 import { AlertCircle, Paperclip, ArrowUp, Square, X, FileText, Image as ImageIcon, Table as TableIcon, Sparkles, Plus } from "lucide-react";
 
 const ATTACHMENT_ICONS: Record<string, typeof FileText> = {
@@ -44,6 +45,8 @@ export default function ChatPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [textMode, setTextMode] = useState<TextMode>("auto");
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("medium");
   // Default to Flare -- fast and same price as Sunburst. Was IMAGE_MODELS[2]
   // (Qwen), which is no longer in the list and would crash the index access.
   const [imageModel, setImageModel] = useState<string>(IMAGE_MODELS[0]);
@@ -165,9 +168,17 @@ export default function ChatPage() {
       const m = window.localStorage.getItem("teacherai.imageModel");
       const q = window.localStorage.getItem("teacherai.imageQuality");
       const s = window.localStorage.getItem("teacherai.imageSize");
+      const textModePreference = window.localStorage.getItem("teacherai.textMode");
+      const reasoningPreference = window.localStorage.getItem("teacherai.reasoningEffort");
       if (m && (IMAGE_MODELS as readonly string[]).includes(m)) setImageModel(m);
       if (q && (IMAGE_QUALITIES as readonly string[]).includes(q)) setImageQuality(q);
       if (s && IMAGE_SIZES.some((sz) => sz.value === s)) setImageSize(s);
+      if (textModePreference && ["auto", "luna", "terra", "sol"].includes(textModePreference)) {
+        setTextMode(textModePreference as TextMode);
+      }
+      if (reasoningPreference && ["low", "medium", "high"].includes(reasoningPreference)) {
+        setReasoningEffort(reasoningPreference as ReasoningEffort);
+      }
     } catch {
       /* private mode */
     }
@@ -307,6 +318,8 @@ export default function ChatPage() {
         {
           message: text,
           conversation_id: activeId,
+          mode: textMode,
+          reasoning_effort: reasoningEffort,
           image_model: imageModel,
           size: imageSize,
           quality: imageQuality,
@@ -428,6 +441,20 @@ export default function ChatPage() {
       <main className="flex flex-1 flex-col min-w-0 relative">
         {/* Top bar controls */}
         <div className="flex items-center gap-3 px-4 py-2.5 border-b border-emerald-100 bg-white flex-wrap md:pl-6">
+          <TextModelPicker
+            mode={textMode}
+            reasoningEffort={reasoningEffort}
+            onChange={({ mode, reasoningEffort: nextReasoningEffort }) => {
+              setTextMode(mode);
+              setReasoningEffort(nextReasoningEffort);
+              try {
+                window.localStorage.setItem("teacherai.textMode", mode);
+                window.localStorage.setItem("teacherai.reasoningEffort", nextReasoningEffort);
+              } catch {
+                /* private mode */
+              }
+            }}
+          />
           <ImageModelPicker
             availableModels={availableModels}
             model={imageModel}
