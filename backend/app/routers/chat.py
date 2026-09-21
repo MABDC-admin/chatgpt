@@ -21,6 +21,7 @@ from app.schemas import (
     ConversationDetail,
     ConversationOut,
     ConversationUpdate,
+    RegenerateRequest,
 )
 from app.services import ai, imaging, pptgen
 from app.services.credits import assert_has_balance, record_usage
@@ -445,6 +446,60 @@ async def chat(
     )
 
 
+@router.post("/conversations/{conversation_id}/regenerate")
+async def regenerate_last_text_answer(
+    conversation_id: uuid.UUID,
+    payload: RegenerateRequest,
+    user: User = Depends(require(Permission.AI_CHAT)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Replace the latest assistant text without discarding the user prompt."""
+    await assert_has_balance(db, user.id)
+    allowed, _ = await check_rate_limit(str(user.id), "chat")
+    if not allowed:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests — slow down a moment")
+
+    convo = await db.scalar(
+        select(Conversation)
+        .options(selectinload(Conversation.messages))
+        .where(Conversation.id == conversation_id, Conversation.user_id == user.id)
+    )
+    if convo is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+
+    stored = list(convo.messages)
+    if len(stored) < 2 or stored[-1].role != "assistant" or stored[-1].image_url:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Only the latest text response can be regenerated.",
+        )
+    if stored[-2].role != "user":
+        raise HTTPException(status.HTTP_409_CONFLICT, "No user prompt is available to regenerate.")
+
+    prior_messages = stored[:-1]
+    text_route = ai.resolve_text_route(
+        stored[-2].content,
+        mode=payload.mode,
+        reasoning_effort=payload.reasoning_effort,
+    )
+    convo.model = text_route.model
+    history = await _build_history(db, prior_messages[-MAX_CONTEXT_MESSAGES:], user.id)
+    await db.commit()
+
+    messages = [{"role": "system", "content": ai.SYSTEM_PROMPT}, *history]
+    return StreamingResponse(
+        _text_turn(
+            messages,
+            text_route,
+            conversation_id,
+            user.id,
+            replace_message_id=stored[-1].id,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 async def _persist_and_bill(
     *,
     conversation_id: uuid.UUID,
@@ -459,6 +514,7 @@ async def _persist_and_bill(
     completion_tokens: int = 0,
     images: int = 0,
     title_from: str | None = None,
+    replace_message_id: uuid.UUID | None = None,
 ) -> None:
     """Store the assistant turn and charge for it.
 
@@ -476,6 +532,16 @@ async def _persist_and_bill(
                 completion_tokens=completion_tokens,
             )
         )
+        # Replace an answer only after the new output is available. Usage logs
+        # remain append-only because the original provider call still occurred.
+        if replace_message_id is not None:
+            await session.execute(
+                delete(Message).where(
+                    Message.id == replace_message_id,
+                    Message.conversation_id == conversation_id,
+                    Message.role == "assistant",
+                )
+            )
         # Naming happens here rather than before the turn so the user waits on
         # the answer, not on the title.
         if title_from:
@@ -501,6 +567,7 @@ async def _text_turn(
     conversation_id: uuid.UUID,
     user_id: uuid.UUID,
     title_from: str | None = None,
+    replace_message_id: uuid.UUID | None = None,
 ) -> AsyncIterator[str]:
     model = route.model
     yield _sse(
@@ -567,6 +634,7 @@ async def _text_turn(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 title_from=title_from,
+                replace_message_id=replace_message_id,
             )
 
 

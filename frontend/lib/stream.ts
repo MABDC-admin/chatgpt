@@ -91,7 +91,7 @@ type StreamHandlers = {
  */
 export async function streamChat(
   body: {
-    message: string;
+    message?: string;
     conversation_id?: string | null;
     model?: string | null;
     mode?: "auto" | "luna" | "terra" | "sol";
@@ -104,9 +104,10 @@ export async function streamChat(
   },
   handlers: StreamHandlers,
   signal?: AbortSignal,
+  endpoint = "/chat",
 ): Promise<void> {
   const token = getToken();
-  const res = await fetch(`${API_BASE}/chat`, {
+  const res = await fetch(`${API_BASE}${endpoint}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

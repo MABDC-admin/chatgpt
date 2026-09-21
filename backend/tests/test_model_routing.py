@@ -2,7 +2,7 @@
 
 from pydantic import ValidationError
 
-from app.schemas import ChatRequest
+from app.schemas import ChatRequest, RegenerateRequest
 from app.services.ai import completion_kwargs, resolve_text_route
 
 
@@ -81,3 +81,10 @@ def test_legacy_models_do_not_receive_reasoning_effort():
     assert "reasoning_effort" not in completion_kwargs(
         "gpt-4o", reasoning_effort="high"
     )
+
+
+def test_regenerate_request_uses_the_same_safe_picker_values():
+    request = RegenerateRequest(mode="sol", reasoning_effort="high")
+
+    assert request.mode == "sol"
+    assert request.reasoning_effort == "high"

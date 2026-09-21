@@ -26,7 +26,7 @@ import { streamChat } from "@/lib/stream";
 import { cn } from "@/lib/utils";
 import ImageModelPicker from "@/components/ImageModelPicker";
 import TextModelPicker, { type ReasoningEffort, type TextMode } from "@/components/TextModelPicker";
-import { AlertCircle, Paperclip, ArrowUp, Square, X, FileText, Image as ImageIcon, Table as TableIcon, Sparkles, Plus } from "lucide-react";
+import { AlertCircle, Paperclip, ArrowUp, Square, X, FileText, Image as ImageIcon, Table as TableIcon, Sparkles, Plus, Copy, Check, RotateCcw, Pencil } from "lucide-react";
 
 const ATTACHMENT_ICONS: Record<string, typeof FileText> = {
   pdf: FileText,
@@ -64,6 +64,7 @@ export default function ChatPage() {
   const composerRef = useRef<HTMLDivElement>(null);
   const [showCreditRequest, setShowCreditRequest] = useState(false);
   const [requestingCredits, setRequestingCredits] = useState(false);
+  const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -403,6 +404,82 @@ export default function ChatPage() {
     }
   }
 
+  async function copyMessage(content: string, index: number) {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMessageIndex(index);
+      window.setTimeout(() => setCopiedMessageIndex(null), 1800);
+    } catch {
+      setError("Your browser could not copy that response.");
+    }
+  }
+
+  function editUserMessage(content: string) {
+    setDraft(content.replace(/\n?<!-- attachments: .*? -->/s, "").trim());
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }
+
+  async function regenerateLastAnswer() {
+    if (!activeId || streaming || messages.length < 2) return;
+    const answerIndex = messages.length - 1;
+    const original = messages[answerIndex];
+    if (original.role !== "assistant" || !original.content || original.image_url || original.file_url) return;
+
+    setError(null);
+    setMessages((prev) => prev.map((message, index) =>
+      index === answerIndex ? { role: "assistant", content: "", pending: true } : message,
+    ));
+    setStreaming(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let receivedOutput = false;
+    let failed = false;
+
+    try {
+      await streamChat(
+        { mode: textMode, reasoning_effort: reasoningEffort },
+        {
+          onDelta: (piece) => {
+            receivedOutput = true;
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              next[next.length - 1] = {
+                role: "assistant",
+                content: (last.pending ? "" : last.content) + piece,
+              };
+              return next;
+            });
+          },
+          onError: (message) => {
+            failed = true;
+            setError(message);
+            if (!receivedOutput) {
+              setMessages((prev) => prev.map((entry, index) => index === answerIndex ? original : entry));
+            }
+          },
+          onDone: () => {
+            void refreshCredits();
+            void refreshConversations();
+          },
+        },
+        controller.signal,
+        `/conversations/${activeId}/regenerate`,
+      );
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        failed = true;
+        setError(err instanceof Error ? err.message : "The assistant could not regenerate that answer");
+      }
+    } finally {
+      if (!receivedOutput && (controller.signal.aborted || failed)) {
+        setMessages((prev) => prev.map((entry, index) => index === answerIndex ? original : entry));
+      }
+      setStreaming(false);
+      abortRef.current = null;
+    }
+  }
+
   async function notifyAdminForCredits() {
     setRequestingCredits(true);
     try {
@@ -579,6 +656,46 @@ export default function ChatPage() {
                           >
                             <ArrowUp className="h-4 w-4 rotate-180" />
                           </a>
+                        </div>
+                      )}
+
+                      {!isPending && m.content && (
+                        <div className="flex items-center gap-1 pt-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                          {isUser ? (
+                            <button
+                              type="button"
+                              onClick={() => editUserMessage(m.content)}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#6b7280] hover:bg-emerald-100 hover:text-emerald-700"
+                              title="Edit and resend"
+                              aria-label="Edit and resend"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void copyMessage(m.content, i)}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#6b7280] hover:bg-emerald-100 hover:text-emerald-700"
+                                title="Copy response"
+                                aria-label="Copy response"
+                              >
+                                {copiedMessageIndex === i ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                              </button>
+                              {i === messages.length - 1 && !m.image_url && !m.file_url && (
+                                <button
+                                  type="button"
+                                  onClick={() => void regenerateLastAnswer()}
+                                  disabled={streaming}
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#6b7280] hover:bg-emerald-100 hover:text-emerald-700 disabled:opacity-50"
+                                  title="Regenerate response"
+                                  aria-label="Regenerate response"
+                                >
+                                  <RotateCcw className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </>
+                          )}
                         </div>
                       )}
                     </div>

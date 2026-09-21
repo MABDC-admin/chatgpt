@@ -114,6 +114,13 @@ class ChatRequest(BaseModel):
     image_model: str | None = None
 
 
+class RegenerateRequest(BaseModel):
+    """Optional route override for a replacement of the latest text answer."""
+
+    mode: Literal["auto", "luna", "terra", "sol"] = "auto"
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
+
+
 class ImageRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     size: str = "1024x1024"
