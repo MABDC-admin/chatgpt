@@ -89,11 +89,51 @@ export type ChatMessage = {
   content: string;
   /** Set when this turn produced a picture; rendered inline in the thread. */
   image_url?: string | null;
+  /** The image model used to generate the image, if any. */
+  image_model?: string | null;
   /** Set when this turn produced a downloadable file (e.g. PPTX). */
   file_url?: string | null;
   file_name?: string | null;
+  /** Set when the backend asks the user to pick an aspect ratio. */
+  ratio_options?: string[];
+  ratio_labels?: string[];
+  /** Files the *user* attached to this turn. Populated at send time and on
+   *  history reload by parsing the `<!-- attachments: [...] -->` marker in the
+   *  stored content. Rendered as thumbnails / chips beside the user text. */
+  attachments?: Attachment[];
   pending?: boolean;
 };
+
+/**
+ * Pull the `<!-- attachments: ["id1","id2"] -->` marker from a stored user
+ * message and return both the visible text and the parsed IDs.
+ */
+export function parseAttachmentMarker(content: string): { text: string; ids: string[] } {
+  const marker = /\n?<!-- attachments: (\[.*?\]) -->/s;
+  const match = content.match(marker);
+  if (!match) return { text: content, ids: [] };
+  let ids: string[] = [];
+  try {
+    const parsed = JSON.parse(match[1]);
+    if (Array.isArray(parsed)) ids = parsed.filter((x): x is string => typeof x === "string");
+  } catch { /* ignore */ }
+  return { text: content.replace(marker, "").trimEnd(), ids };
+}
+
+/** Batch-fetch attachment metadata by id, tolerating individual 404s. */
+export async function fetchAttachments(ids: readonly string[]): Promise<Attachment[]> {
+  const unique = Array.from(new Set(ids));
+  const results = await Promise.all(
+    unique.map(async (id) => {
+      try {
+        return await api<Attachment>(`/uploads/${id}`);
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return results.filter((a): a is Attachment => a !== null);
+}
 
 export function formatCents(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
@@ -191,11 +231,48 @@ export const IMAGE_MODEL_LABELS: Record<string, string> = Object.fromEntries(
   Object.entries(IMAGE_MODEL_INFO).map(([k, v]) => [k, v.label]),
 );
 export const IMAGE_QUALITIES = ["low", "medium", "high"] as const;
+
+export type PptTheme = {
+  id: string;
+  label: string;
+  primary: string;
+  accent: string;
+  bg: string;
+};
+
+export const PPT_THEMES: PptTheme[] = [
+  { id: "emerald",  label: "Emerald Classroom", primary: "#059669", accent: "#f59e0b", bg: "#ffffff" },
+  { id: "ocean",    label: "Ocean Blue",        primary: "#0369a1", accent: "#38bdf8", bg: "#f0f9ff" },
+  { id: "sunset",   label: "Warm Sunset",       primary: "#c2410c", accent: "#fb923c", bg: "#fff7ed" },
+  { id: "lavender", label: "Lavender",          primary: "#7c3aed", accent: "#c084fc", bg: "#faf5ff" },
+  { id: "minimal",  label: "Minimal Dark",      primary: "#18181b", accent: "#a1a1aa", bg: "#ffffff" },
+];
 export const IMAGE_SIZES = [
   { value: "1024x1024", label: "1:1 Square" },
   { value: "1536x1024", label: "3:2 Landscape" },
   { value: "1024x1536", label: "2:3 Portrait" },
 ] as const;
+
+export type ImageStyle = {
+  id: string;
+  label: string;
+  tagline: string;
+  swatch_from: string;
+  swatch_to: string;
+};
+
+let _stylesCache: ImageStyle[] | null = null;
+
+export async function getImageStyles(): Promise<ImageStyle[]> {
+  if (_stylesCache) return _stylesCache;
+  try {
+    const res = await api<{ styles: ImageStyle[] }>("/config/image-styles");
+    _stylesCache = res.styles;
+  } catch {
+    _stylesCache = [];
+  }
+  return _stylesCache;
+}
 
 /**
  * Rough cost per image; hint only, not a bill.

@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -107,6 +108,11 @@ class Message(Base, TimestampMixin):
     # Set when this assistant turn produced a picture, so images live in the
     # conversation thread rather than in a separate gallery-only table.
     image_url: Mapped[str | None] = mapped_column(String(512))
+    # Set when this turn produced a downloadable artifact (PPTX / DOCX / PDF /
+    # XLSX). Without these the download link is only visible during the
+    # streaming session -- refresh the page and it's gone.
+    file_url: Mapped[str | None] = mapped_column(String(512))
+    file_name: Mapped[str | None] = mapped_column(String(512))
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
@@ -230,5 +236,5 @@ class Attachment(Base):
     thumbnail_path: Mapped[str | None] = mapped_column(String(512))
     original_filename: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, index=True
+        DateTime(timezone=True), default=_now, server_default=text("now()"), index=True
     )

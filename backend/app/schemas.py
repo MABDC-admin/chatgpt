@@ -73,6 +73,11 @@ class MessageOut(BaseModel):
     role: str
     content: str
     image_url: str | None = None
+    # Set when the turn produced a downloadable artifact (PPTX / DOCX / PDF /
+    # XLSX). Without these the chat pane can't render a persistent download
+    # link on reload.
+    file_url: str | None = None
+    file_name: str | None = None
     created_at: datetime
 
     class Config:

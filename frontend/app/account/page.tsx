@@ -88,7 +88,7 @@ export default function AccountPage() {
                   <div>
                     <p className="text-xs text-[#6b7280]">Credits this month</p>
                     <p className="text-sm font-semibold text-[#1f2937]">
-                      {credits.monthly_allocation_cents === 0 ? `${formatCents(credits.used_cents)} used (unmetered)` : `${formatCents(credits.remaining_cents)} remaining`}
+                      {credits.monthly_allocation_cents === 0 ? `${credits.used_cents} credits used (unmetered)` : `${credits.remaining_cents} credits remaining`}
                     </p>
                   </div>
                 </CardContent></Card>

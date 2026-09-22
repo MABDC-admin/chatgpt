@@ -20,7 +20,14 @@
 - Inline error alert (destructive variant)
 
 ### /chat
-- Top bar: model selector, quality selector, cost hint badges, KB toggle switch
+- **Top command bar**: text model picker (TextModelPicker), image model picker
+  (ImageModelPicker: model tiles + quality pill + aspect-ratio tiles), Knowledge
+  base toggle (visible ≥ lg), New chat button. Compact, one row.
+- **Image style chips** (above the composer, next to it): quick-pick emoji
+  buttons that append a `[Style: ...]` suffix to the composer draft. Each chip
+  is inert until clicked; deduplicates so tapping twice doesn't stack. Ten
+  presets today: Cartoonize, Infographic, Whiteboard, Map, Game Board, Realistic,
+  Storybook, Science, Vintage, Comic Strip.
 - Message rows: full-width, avatar left, no bubbles, alternating subtle bg
 - Composer: fixed bottom, elevated, attachment button + auto-resize textarea + send/stop
 - Attachments: removable chips above composer

@@ -10,13 +10,17 @@ import {
   API_BASE,
   api,
   availableImageModels,
+  fetchAttachments,
   getImageProviders,
   getToken,
+  parseAttachmentMarker,
   uploadFile,
   type Attachment,
   IMAGE_MODELS,
+  IMAGE_MODEL_LABELS,
   IMAGE_QUALITIES,
   IMAGE_SIZES,
+  PPT_THEMES,
   type ChatMessage,
   type Conversation,
   type Credits,
@@ -51,12 +55,26 @@ export default function ChatPage() {
   // (Qwen), which is no longer in the list and would crash the index access.
   const [imageModel, setImageModel] = useState<string>(IMAGE_MODELS[0]);
   const [imageQuality, setImageQuality] = useState<string>("medium");
-  const [imageSize, setImageSize] = useState<string>("1024x1024");
+  const [imageSize, setImageSize] = useState<string>("1536x1024");
+  // True when the user explicitly picked a ratio (via composer or inline buttons).
+  // When false, the backend will show inline ratio buttons before generating.
+  const [sizeExplicit, setSizeExplicit] = useState(false);
+  // Selected style preset from the Image Studio ribbon. Defaults to "none"
+  // (no style suffix); a proper style is chosen the first time the user
+  // clicks a tile, then persisted per-viewer.
   // Set from /api/config/image-providers on mount so we hide models the
   // server can't reach (e.g. Qwen when NEXUM_API_KEY is unset).
   const [availableModels, setAvailableModels] = useState<string[]>(IMAGE_MODELS.slice());
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [useKnowledge, setUseKnowledge] = useState(false);
+  // PPT / TEACHERDECK composer mode
+  const [pptMode, setPptMode] = useState(false);
+  const [pptTopic, setPptTopic] = useState("");
+  const [pptSubject, setPptSubject] = useState("");
+  const [pptLevel, setPptLevel] = useState("");
+  const [pptDuration, setPptDuration] = useState("");
+  const [pptSlides, setPptSlides] = useState("15");
+  const [pptTheme, setPptTheme] = useState("emerald");
   const [uploading, setUploading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -227,7 +245,33 @@ export default function ChatPage() {
     }
     try {
       const detail = await api<{ messages: ChatMessage[] }>(`/conversations/${id}`);
-      setMessages(detail.messages);
+
+      // Collect every attachment id embedded in the user turns so we can
+      // batch-fetch metadata once, then rebuild each message with its
+      // parsed text + hydrated attachment list. Without this, the marker
+      // comment shows up as literal text in the user bubble and the
+      // uploaded picture disappears from the transcript on reload.
+      const allIds: string[] = [];
+      for (const m of detail.messages) {
+        if (m.role === "user") {
+          const { ids } = parseAttachmentMarker(m.content);
+          allIds.push(...ids);
+        }
+      }
+      const attachmentsById = new Map<string, Attachment>();
+      if (allIds.length > 0) {
+        const fetched = await fetchAttachments(allIds);
+        for (const a of fetched) attachmentsById.set(a.id, a);
+      }
+      const rebuilt = detail.messages.map((m) => {
+        if (m.role !== "user") return m;
+        const { text, ids } = parseAttachmentMarker(m.content);
+        const attachments = ids
+          .map((id) => attachmentsById.get(id))
+          .filter((a): a is Attachment => Boolean(a));
+        return { ...m, content: text, attachments };
+      });
+      setMessages(rebuilt);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not open that conversation");
     }
@@ -309,14 +353,38 @@ export default function ChatPage() {
   }, [onPickFiles]);
 
   async function send() {
-    const text = draft.trim();
-    if (!text || streaming) return;
+    let text = draft.trim();
+    if (!text && !pptMode) return;
+    if (streaming) return;
+
+    // When PPT mode is active, format as TEACHERDECK command
+    if (pptMode) {
+      const parts: string[] = ["TEACHERDECK:"];
+      if (pptTopic) parts.push(`Topic: ${pptTopic}`);
+      if (pptSubject) parts.push(`Subject: ${pptSubject}`);
+      if (pptLevel) parts.push(`Level: ${pptLevel}`);
+      if (pptDuration) parts.push(`Duration: ${pptDuration} minutes`);
+      if (pptSlides) parts.push(`Slides: ${pptSlides}`);
+      if (pptTheme && pptTheme !== "emerald") parts.push(`Theme: ${pptTheme}`);
+      const header = parts.join("\n");
+      text = text ? `${header}\n\nAdditional instructions: ${text}` : header;
+    }
+
+    if (!text) return;
 
     setDraft("");
     setError(null);
     const sentWith = attachments;
     setAttachments([]);
-    setMessages((prev) => [...prev, { role: "user", content: text }, { role: "assistant", content: "" }]);
+    setMessages((prev) => [
+      ...prev,
+      // Attach the actual Attachment objects to the user message so its
+      // thumbnails render immediately and survive re-renders. On history
+      // reload we re-derive these from the "<!-- attachments: [...] -->"
+      // marker in the stored content.
+      { role: "user", content: text, attachments: sentWith },
+      { role: "assistant", content: "" },
+    ]);
     setStreaming(true);
 
     const controller = new AbortController();
@@ -330,7 +398,7 @@ export default function ChatPage() {
           mode: textMode,
           reasoning_effort: reasoningEffort,
           image_model: imageModel,
-          size: imageSize,
+          size: sizeExplicit ? imageSize : undefined,
           quality: imageQuality,
           attachment_ids: sentWith.map((a) => a.id),
           use_knowledge_base: useKnowledge,
@@ -343,6 +411,21 @@ export default function ChatPage() {
               next[next.length - 1] = { role: "assistant", content: msg, pending: true };
               return next;
             }),
+          onRatioPrompt: ({ options, labels, message }) =>
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last?.role === "assistant") {
+                next[next.length - 1] = {
+                  ...last,
+                  content: message,
+                  ratio_options: options,
+                  ratio_labels: labels,
+                  pending: false,
+                };
+              }
+              return next;
+            }),
           onImage: ({ url, caption }) =>
             setMessages((prev) => {
               const next = [...prev];
@@ -353,6 +436,7 @@ export default function ChatPage() {
                   role: "assistant",
                   content: caption,
                   image_url: url,
+                  image_model: imageModel,
                 };
               } else {
                 // Bulk slides: append each new image as its own message
@@ -360,6 +444,7 @@ export default function ChatPage() {
                   role: "assistant",
                   content: caption,
                   image_url: url,
+                  image_model: imageModel,
                 });
               }
               return next;
@@ -425,6 +510,84 @@ export default function ChatPage() {
   function editUserMessage(content: string) {
     setDraft(content.replace(/\n?<!-- attachments: .*? -->/s, "").trim());
     window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }
+
+  /** User picked an aspect ratio from the inline buttons. Resend the last user
+   *  message with the chosen size so the backend generates immediately. */
+  function pickRatio(size: string, label: string) {
+    // Find the last user message to resend
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUser || streaming) return;
+
+    setImageSize(size);
+    setSizeExplicit(true);
+
+    // Remove the ratio_prompt assistant message and replace with pending placeholder
+    setMessages((prev) => {
+      const filtered = prev.filter((m) => !m.ratio_options);
+      return [
+        ...filtered,
+        { role: "assistant" as const, content: `Generating ${label} image…`, pending: true },
+      ];
+    });
+
+    setStreaming(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const sentWith = lastUser.attachments ?? [];
+
+    streamChat(
+      {
+        message: lastUser.content,
+        conversation_id: activeId,
+        mode: textMode,
+        reasoning_effort: reasoningEffort,
+        image_model: imageModel,
+        size,
+        quality: imageQuality,
+        attachment_ids: sentWith.map((a) => a.id),
+        use_knowledge_base: useKnowledge,
+      },
+      {
+        onStart: ({ conversation_id }) => setActiveId(conversation_id),
+        onStatus: (msg) =>
+          setMessages((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = { role: "assistant", content: msg, pending: true };
+            return next;
+          }),
+        onImage: ({ url, caption }) =>
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant" && !last.image_url && (!last.content || last.pending)) {
+              next[next.length - 1] = { role: "assistant", content: caption, image_url: url, image_model: imageModel };
+            } else {
+              next.push({ role: "assistant", content: caption, image_url: url, image_model: imageModel });
+            }
+            return next;
+          }),
+        onDelta: (piece) =>
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            next[next.length - 1] = { role: "assistant", content: (last.pending ? "" : last.content) + piece };
+            return next;
+          }),
+        onError: (message) => setError(message),
+        onDone: () => {
+          void refreshCredits();
+          void refreshConversations();
+        },
+      },
+      controller.signal,
+    ).catch((err) => {
+      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Failed");
+    }).finally(() => {
+      setStreaming(false);
+      abortRef.current = null;
+    });
   }
 
   async function regenerateLastAnswer() {
@@ -549,6 +712,20 @@ export default function ChatPage() {
               }
             }}
           />
+          <button
+            type="button"
+            onClick={() => setPptMode((v) => !v)}
+            className={cn(
+              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors",
+              pptMode
+                ? "border-amber-400 bg-amber-50 text-amber-700 ring-2 ring-amber-200"
+                : "border-gray-200 bg-white text-[#6b7280] hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700"
+            )}
+            title="Toggle presentation mode (TEACHERDECK)"
+          >
+            <TableIcon className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">PPT</span>
+          </button>
           <ImageModelPicker
             availableModels={availableModels}
             model={imageModel}
@@ -558,16 +735,14 @@ export default function ChatPage() {
               setImageModel(model);
               setImageQuality(quality);
               setImageSize(size);
+              setSizeExplicit(true);
               try {
                 window.localStorage.setItem("teacherai.imageModel", model);
                 window.localStorage.setItem("teacherai.imageQuality", quality);
                 window.localStorage.setItem("teacherai.imageSize", size);
-              } catch {
-                /* private mode */
-              }
+              } catch { /* private mode */ }
             }}
           />
-
           <label className="ml-auto hidden cursor-pointer select-none items-center gap-2 text-sm text-[#6b7280] lg:inline-flex">
             <input
               type="checkbox"
@@ -679,9 +854,54 @@ export default function ChatPage() {
                         </p>
                       )}
 
+                      {/* Files the user attached to THIS turn: thumbnails for
+                          images, chip for anything else. Same visual grammar
+                          as the composer preview, so a photo stays visible in
+                          the transcript instead of vanishing after Enter. */}
+                      {isUser && m.attachments && m.attachments.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {m.attachments.map((a) => {
+                            if (a.kind === "image") {
+                              return (
+                                <div
+                                  key={a.id}
+                                  className="h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-emerald-200 bg-emerald-50 shadow-sm"
+                                  title={a.filename}
+                                >
+                                  <AuthedImage
+                                    src={`/api/files/download/${a.id}`}
+                                    alt={a.filename}
+                                    className="h-full w-full object-cover"
+                                  />
+                                </div>
+                              );
+                            }
+                            const Icon = ATTACHMENT_ICONS[a.kind] ?? FileText;
+                            return (
+                              <div
+                                key={a.id}
+                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs max-w-[220px]"
+                                title={a.filename}
+                              >
+                                <Icon className="h-3 w-3 shrink-0 text-emerald-600" />
+                                <span className="truncate text-[#1f2937]">{a.filename}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
                       {m.image_url && (
-                        <div className="mt-3 max-w-md rounded-xl overflow-hidden border border-emerald-100 shadow-sm">
-                          <AuthedImage src={m.image_url} alt={m.content || "Generated image"} />
+                        <div className="mt-3 max-w-md">
+                          <div className="rounded-xl overflow-hidden border border-emerald-100 shadow-sm">
+                            <AuthedImage src={m.image_url} alt={m.content || "Generated image"} />
+                          </div>
+                          {m.image_model && (
+                            <p className="mt-1.5 text-[11px] text-[#6b7280] flex items-center gap-1">
+                              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                              Generated with {IMAGE_MODEL_LABELS[m.image_model] || m.image_model}
+                            </p>
+                          )}
                         </div>
                       )}
 
@@ -692,14 +912,64 @@ export default function ChatPage() {
                             <p className="text-sm font-medium text-[#1f2937] truncate">{m.file_name || "Download"}</p>
                             <p className="text-xs text-[#6b7280]">PowerPoint Presentation</p>
                           </div>
-                          <a
-                            href={m.file_url.startsWith("/api/") ? `${API_BASE}${m.file_url}` : m.file_url}
-                            download
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const url = m.file_url!.startsWith("/api/") ? `${API_BASE}${m.file_url}` : m.file_url!;
+                              try {
+                                const token = getToken();
+                                const res = await fetch(url, {
+                                  headers: token ? { Authorization: `Bearer ${token}` } : {},
+                                });
+                                if (!res.ok) throw new Error(String(res.status));
+                                const blob = await res.blob();
+                                const blobUrl = URL.createObjectURL(blob);
+                                const a = document.createElement("a");
+                                a.href = blobUrl;
+                                a.download = m.file_name || "presentation.pptx";
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                URL.revokeObjectURL(blobUrl);
+                              } catch (err) {
+                                setError(`Download failed: ${err instanceof Error ? err.message : "unknown error"}`);
+                              }
+                            }}
                             className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
                             title="Download"
                           >
                             <ArrowUp className="h-4 w-4 rotate-180" />
-                          </a>
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Inline aspect-ratio picker shown when backend asks */}
+                      {m.ratio_options && m.ratio_options.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {m.ratio_options.map((opt, idx) => {
+                            const label = m.ratio_labels?.[idx] ?? opt;
+                            const shapes: Record<string, { w: number; h: number }> = {
+                              "1024x1024": { w: 20, h: 20 },
+                              "1536x1024": { w: 26, h: 18 },
+                              "1024x1536": { w: 18, h: 26 },
+                            };
+                            const shape = shapes[opt] ?? shapes["1024x1024"];
+                            return (
+                              <button
+                                key={opt}
+                                type="button"
+                                onClick={() => pickRatio(opt, label)}
+                                disabled={streaming}
+                                className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-[#1f2937] hover:border-emerald-400 hover:bg-emerald-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                <span
+                                  className="rounded-sm border border-emerald-300 bg-emerald-50"
+                                  style={{ width: shape.w, height: shape.h }}
+                                />
+                                {label}
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
 
@@ -776,11 +1046,40 @@ export default function ChatPage() {
           </div>
         )}
 
-        {/* Attachment chips */}
+        {/* Attachment previews: images render as thumbnail tiles (a real
+            preview of what was uploaded, ChatGPT-style), every other type
+            keeps the pill chip with its file icon. */}
         {attachments.length > 0 && (
           <div className="mx-auto max-w-3xl w-full px-6 mb-2">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 items-start">
               {attachments.map((a) => {
+                const remove = () =>
+                  setAttachments((prev) => prev.filter((x) => x.id !== a.id));
+
+                if (a.kind === "image") {
+                  return (
+                    <div
+                      key={a.id}
+                      className="group relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-emerald-200 bg-emerald-50 shadow-sm"
+                      title={a.filename}
+                    >
+                      <AuthedImage
+                        src={`/api/files/download/${a.id}`}
+                        alt={a.filename}
+                        className="h-full w-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        aria-label={`Remove ${a.filename}`}
+                        onClick={remove}
+                        className="absolute right-0.5 top-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  );
+                }
+
                 const Icon = ATTACHMENT_ICONS[a.kind] ?? FileText;
                 return (
                   <div
@@ -798,7 +1097,7 @@ export default function ChatPage() {
                     <button
                       type="button"
                       aria-label={`Remove ${a.filename}`}
-                      onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
+                      onClick={remove}
                       className="shrink-0 inline-flex h-5 w-5 items-center justify-center rounded-full text-[#6b7280] hover:bg-emerald-100 hover:text-emerald-700 transition-colors"
                     >
                       <X className="h-3 w-3" />
@@ -829,7 +1128,84 @@ export default function ChatPage() {
             </div>
           )}
           <div className="mx-auto max-w-3xl">
-            {/* Image-oriented prompt helpers stay compact until the user needs them. */}
+            {/* Image-oriented prompt helpers stay compact until the user needs them.
+                In PPT mode, replaced with TEACHERDECK structured input fields. */}
+            {pptMode ? (
+              <div className="mb-2 flex items-center gap-2 overflow-x-auto pb-0.5 flex-wrap">
+                <span className="shrink-0 text-xs font-semibold text-amber-700 uppercase tracking-wider">📊 TeacherDeck</span>
+                <input
+                  type="text"
+                  placeholder="Topic (e.g. Photosynthesis)"
+                  value={pptTopic}
+                  onChange={(e) => setPptTopic(e.target.value)}
+                  disabled={streaming}
+                  className="h-7 min-w-[160px] rounded-md border border-amber-200 bg-amber-50 px-2.5 text-xs text-[#1f2937] placeholder:text-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-400 disabled:opacity-50"
+                />
+                <input
+                  type="text"
+                  placeholder="Subject (e.g. Science)"
+                  value={pptSubject}
+                  onChange={(e) => setPptSubject(e.target.value)}
+                  disabled={streaming}
+                  className="h-7 min-w-[120px] rounded-md border border-amber-200 bg-amber-50 px-2.5 text-xs text-[#1f2937] placeholder:text-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-400 disabled:opacity-50"
+                />
+                <input
+                  type="text"
+                  placeholder="Level/Grade (e.g. 7)"
+                  value={pptLevel}
+                  onChange={(e) => setPptLevel(e.target.value)}
+                  disabled={streaming}
+                  className="h-7 w-28 shrink-0 rounded-md border border-amber-200 bg-amber-50 px-2.5 text-xs text-[#1f2937] placeholder:text-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-400 disabled:opacity-50"
+                />
+                <input
+                  type="text"
+                  placeholder="Duration (e.g. 50)"
+                  value={pptDuration}
+                  onChange={(e) => setPptDuration(e.target.value)}
+                  disabled={streaming}
+                  className="h-7 w-28 shrink-0 rounded-md border border-amber-200 bg-amber-50 px-2.5 text-xs text-[#1f2937] placeholder:text-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-400 disabled:opacity-50"
+                />
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-amber-600">Slides:</label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={40}
+                    value={pptSlides}
+                    onChange={(e) => setPptSlides(e.target.value)}
+                    disabled={streaming}
+                    className="h-7 w-16 shrink-0 rounded-md border border-amber-200 bg-amber-50 px-2 text-xs text-[#1f2937] focus:outline-none focus:ring-1 focus:ring-amber-400 disabled:opacity-50"
+                  />
+                </div>
+                <div className="flex items-center gap-1 ml-auto">
+                  <span className="text-xs text-amber-600 mr-1">Theme:</span>
+                  {PPT_THEMES.map((th) => {
+                    const active = pptTheme === th.id;
+                    return (
+                      <button
+                        key={th.id}
+                        type="button"
+                        onClick={() => setPptTheme(th.id)}
+                        disabled={streaming}
+                        title={th.label}
+                        className={cn(
+                          "shrink-0 flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-all disabled:opacity-50",
+                          active
+                            ? "border-amber-400 bg-amber-100 text-amber-800 ring-1 ring-amber-300"
+                            : "border-gray-200 bg-white text-gray-500 hover:border-amber-300"
+                        )}
+                      >
+                        <span className="flex gap-0.5">
+                          <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: th.primary }} />
+                          <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: th.accent }} />
+                        </span>
+                        <span className="hidden sm:inline">{th.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
             <div className="mb-2 flex items-center gap-2 overflow-x-auto pb-0.5">
               <span className="shrink-0 text-xs text-[#6b7280]">Image styles</span>
               
@@ -910,7 +1286,65 @@ export default function ChatPage() {
                 <span>🖼️</span>
                 <span>Realistic</span>
               </button>
+
+              {/* Non-redundant additions: warm storybook (early years literacy),
+                  labelled science diagram (science topics -- distinct from the
+                  Infographic tile's "clean data viz" tone), sepia historical
+                  aesthetic (history/values), and narrative comic panels
+                  (language arts, biographies, story sequences). */}
+              <button
+                type="button"
+                onClick={() => {
+                  const suffix = " [Style: warm children's storybook illustration, soft pencil and watercolor textures, gentle color palette, expressive characters, picture-book composition, suitable for early years reading materials]";
+                  if (!draft.includes(suffix)) setDraft(draft + suffix);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700 border border-rose-200 hover:bg-rose-100 hover:border-rose-300 transition-colors"
+                title="Storybook illustration for early years"
+              >
+                <span>📚</span>
+                <span>Storybook</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const suffix = " [Style: labeled scientific diagram, cross-section view with callout arrows and annotation text, clean line art on white background, textbook illustration quality, biology or physics reference style]";
+                  if (!draft.includes(suffix)) setDraft(draft + suffix);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full bg-teal-50 px-3 py-1 text-xs font-medium text-teal-700 border border-teal-200 hover:bg-teal-100 hover:border-teal-300 transition-colors"
+                title="Labeled scientific cross-sections and reference diagrams"
+              >
+                <span>🔬</span>
+                <span>Science</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const suffix = " [Style: sepia-toned historical illustration, aged paper texture, engraved lithograph look, muted browns and creams, 19th-century textbook aesthetic, subtle grain, timeless composition]";
+                  if (!draft.includes(suffix)) setDraft(draft + suffix);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full bg-yellow-50 px-3 py-1 text-xs font-medium text-yellow-800 border border-yellow-200 hover:bg-yellow-100 hover:border-yellow-300 transition-colors"
+                title="Vintage textbook look for history topics"
+              >
+                <span>📜</span>
+                <span>Vintage</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const suffix = " [Style: comic book panel layout, sequential storytelling with 3 to 4 panels, clean linework with bold outlines, speech bubbles allowed, expressive characters, dynamic narrative composition]";
+                  if (!draft.includes(suffix)) setDraft(draft + suffix);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700 border border-sky-200 hover:bg-sky-100 hover:border-sky-300 transition-colors"
+                title="Comic-strip storytelling for language arts and history"
+              >
+                <span>🎬</span>
+                <span>Comic Strip</span>
+              </button>
             </div>
+            )}
 
             <div className="relative flex items-end gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-3 shadow-sm focus-within:ring-2 focus-within:ring-emerald-500 focus-within:border-emerald-400 transition-shadow">
               <input
@@ -935,7 +1369,7 @@ export default function ChatPage() {
               <textarea
                 ref={textareaRef}
                 rows={1}
-                placeholder="Message the school assistant…"
+                placeholder={pptMode ? "Describe your lesson or leave blank to use fields above…" : "Message the school assistant…"}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onKeyDown}

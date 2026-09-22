@@ -191,6 +191,15 @@ INTENT_TEXT = "TEXT"
 INTENT_IMAGE_NEW = "IMAGE_NEW"
 INTENT_IMAGE_EDIT = "IMAGE_EDIT"
 INTENT_PPT = "PPT"
+# Document artifacts. The DOCX/PDF paths share a Markdown planner; XLSX has
+# its own tabular-JSON planner.
+INTENT_DOCX = "DOCX"
+INTENT_PDF = "PDF"
+INTENT_XLSX = "XLSX"
+
+# All intents that produce a downloadable artifact rather than a chat reply.
+# Consulted by the router to pick the correct turn function.
+ARTIFACT_INTENTS = {INTENT_PPT, INTENT_DOCX, INTENT_PDF, INTENT_XLSX}
 
 _PPT_PROMPT_FILE = Path(__file__).resolve().parent.parent / "prompts" / "ppt_master_prompt.txt"
 
@@ -204,11 +213,14 @@ def _load_ppt_prompt() -> str:
 
 PPT_MASTER_PROMPT = _load_ppt_prompt()
 
-_INTENT_PROMPT = """You route messages in a school assistant that can chat, create images, and generate PowerPoint presentations. Read the user's latest message and answer with exactly one word.
+_INTENT_PROMPT = """You route messages in a school assistant that can chat, create images, and generate documents. Read the user's latest message and answer with exactly one word.
 
 IMAGE_NEW - the user is ASKING YOU TO MAKE a new picture, poster, diagram, illustration, mockup or UI design right now.
 IMAGE_EDIT - the user wants the PREVIOUS image in this conversation changed (colour, text, layout, background, style, adding or removing elements, quality, repositioning).
 PPT - the user wants a PowerPoint presentation, .pptx file, or slide deck created.
+DOCX - the user wants a Word document (.docx) created: worksheet, handout, letter, report, lesson plan as a document, printable page.
+PDF - the user wants a PDF created (printable, exportable).
+XLSX - the user wants a spreadsheet (.xlsx / Excel) with rows and columns: a grading sheet, attendance list, data table, class roster, question bank in table form.
 TEXT - anything else, including every question ABOUT images, presentations, or about you.
 
 Critical distinction. A question about your abilities is TEXT, not a request to create. The user wants an answer, not a file. These are all TEXT:
@@ -236,6 +248,27 @@ These are PPT, because they ask for a presentation or slide deck:
   "I need a pptx on the solar system"        -> PPT
   "make a presentation about animals"        -> PPT
 
+These are DOCX, because they want a Word document:
+  "make a worksheet about fractions"                  -> DOCX
+  "create a lesson plan document about photosynthesis" -> DOCX
+  "write me a printable handout on force and motion"  -> DOCX
+  "turn this into a Word file"                        -> DOCX
+  "type this out as a docx"                           -> DOCX
+  "generate a parent letter about the field trip"     -> DOCX
+
+These are PDF, because they want a PDF:
+  "export this as a PDF"                              -> PDF
+  "make me a printable PDF of the quiz"               -> PDF
+  "save as PDF"                                       -> PDF
+  "give me a PDF version"                             -> PDF
+
+These are XLSX, because they want a spreadsheet:
+  "build a grading rubric spreadsheet"                -> XLSX
+  "make an attendance sheet in Excel"                 -> XLSX
+  "generate a class roster xlsx"                      -> XLSX
+  "turn this table into an Excel file"                -> XLSX
+  "spreadsheet of Grade 5 test scores"                -> XLSX
+
 These are IMAGE_EDIT when a previous image exists:
   "make it blue"                  -> IMAGE_EDIT
   "remove the sidebar"            -> IMAGE_EDIT
@@ -245,6 +278,7 @@ Rules:
 - If the message is phrased as a question and does not give a subject to create, choose TEXT.
 - Choose IMAGE_EDIT only when a previous image exists in this conversation.
 - PPT takes priority over IMAGE_NEW when the user mentions presentations, slides, ppt, pptx, or powerpoint.
+- DOCX / PDF / XLSX take priority over IMAGE_NEW when the user mentions Word, worksheet, handout, printable, PDF, Excel, or spreadsheet.
 - When genuinely unsure, choose TEXT.
 
 Answer with the single word and nothing else."""
@@ -281,6 +315,16 @@ async def classify_intent(message: str, *, has_previous_image: bool) -> str:
     except Exception:
         return INTENT_TEXT
 
+    # Order matters: check the most specific artifact intents first. XLSX must
+    # come before PPT/DOCX because "spreadsheet" and "table" don't contain the
+    # substring 'PPT' or 'DOC' but the classifier's one-word answer might, in
+    # theory, be XLSX_TABLE or similar; the exact-substring match is safe.
+    if INTENT_XLSX in answer:
+        return INTENT_XLSX
+    if INTENT_DOCX in answer:
+        return INTENT_DOCX
+    if INTENT_PDF in answer:
+        return INTENT_PDF
     if INTENT_PPT in answer:
         return INTENT_PPT
     if INTENT_IMAGE_EDIT in answer and has_previous_image:

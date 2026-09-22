@@ -144,7 +144,7 @@ async def edit(
 
 def normalise(size: str | None, quality: str | None) -> tuple[str, str]:
     return (
-        size if size in VALID_SIZES else "1024x1024",
+        size if size in VALID_SIZES else "1536x1024",
         quality if quality in VALID_QUALITIES else "medium",
     )
 

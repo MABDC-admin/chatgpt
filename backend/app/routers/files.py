@@ -184,11 +184,16 @@ async def download_file(
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "File no longer exists on disk")
 
+    # `original_filename` is a human-readable *label* (e.g. "PDF: convert to
+    # pdf") used elsewhere in the UI. Using it as the download filename saves
+    # the file with no extension and a colon in the name -- Windows won't
+    # open the result. `filename` is the sanitised, extension-carrying name
+    # (e.g. "PDF_Conversion_Request.pdf") and is what the browser must see.
     from fastapi.responses import FileResponse
     return FileResponse(
         path=str(path),
         media_type=record.mime_type,
-        filename=record.original_filename or record.filename,
+        filename=record.filename,
     )
 
 

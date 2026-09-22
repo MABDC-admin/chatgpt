@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard — MABDC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-gray-50">
+    <nav class="bg-white border-b px-6 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <h1 class="text-lg font-bold text-gray-900">MABDC Admin</h1>
+        </div>
+        <button onclick="logout()" class="px-4 py-1.5 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors">Logout</button>
+    </nav>
+
+    <div class="max-w-6xl mx-auto p-6">
+        <!-- Stats -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8" id="stats">
+            <div class="bg-white rounded-xl border p-4">
+                <p class="text-sm text-gray-500">Total Users</p>
+                <p class="text-2xl font-bold text-gray-900" id="stat-total">—</p>
+            </div>
+            <div class="bg-white rounded-xl border p-4">
+                <p class="text-sm text-gray-500">Pending</p>
+                <p class="text-2xl font-bold text-yellow-600" id="stat-pending">—</p>
+            </div>
+            <div class="bg-white rounded-xl border p-4">
+                <p class="text-sm text-gray-500">Approved</p>
+                <p class="text-2xl font-bold text-green-600" id="stat-approved">—</p>
+            </div>
+            <div class="bg-white rounded-xl border p-4">
+                <p class="text-sm text-gray-500">Revoked</p>
+                <p class="text-2xl font-bold text-red-600" id="stat-revoked">—</p>
+            </div>
+        </div>
+
+        <!-- Users Table -->
+        <div class="bg-white rounded-xl border overflow-hidden">
+            <div class="px-6 py-4 border-b flex items-center justify-between">
+                <h2 class="font-semibold text-gray-900">Users</h2>
+                <button onclick="loadData()" class="text-sm text-purple-600 hover:underline">Refresh</button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 text-left">
+                        <tr>
+                            <th class="px-6 py-3 font-medium text-gray-500">Email</th>
+                            <th class="px-6 py-3 font-medium text-gray-500">Status</th>
+                            <th class="px-6 py-3 font-medium text-gray-500">Role</th>
+                            <th class="px-6 py-3 font-medium text-gray-500">Access</th>
+                            <th class="px-6 py-3 font-medium text-gray-500">Joined</th>
+                            <th class="px-6 py-3 font-medium text-gray-500 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-body" class="divide-y">
+                        <tr><td colspan="6" class="px-6 py-8 text-center text-gray-400">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    async function api(path, opts = {}) {
+        const res = await fetch(path, {
+            headers: {'Content-Type': 'application/json'},
+            ...opts
+        });
+        // Redirected to login (no session or expired)
+        if (res.status === 401 || res.status === 403 || res.redirected) {
+            window.location.href = '/auth/login.html';
+            return null;
+        }
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
+            window.location.href = '/auth/login.html';
+            return null;
+        }
+        return res.json();
+    }
+
+    async function loadData() {
+        const stats = await api('/api/admin/stats');
+        if (stats && stats.ok) {
+            document.getElementById('stat-total').textContent = stats.data.total;
+            document.getElementById('stat-pending').textContent = stats.data.pending;
+            document.getElementById('stat-approved').textContent = stats.data.approved;
+            document.getElementById('stat-revoked').textContent = stats.data.revoked;
+        }
+
+        const users = await api('/api/admin/users');
+        const tbody = document.getElementById('users-body');
+        if (!users || !users.ok || !users.data) {
+            tbody.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-red-500">Failed to load users</td></tr>';
+            return;
+        }
+
+        if (users.data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-gray-400">No users yet</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = users.data.map(u => {
+            const statusColors = {
+                pending: 'bg-yellow-100 text-yellow-700',
+                approved: 'bg-green-100 text-green-700',
+                revoked: 'bg-red-100 text-red-700'
+            };
+            const color = statusColors[u.status] || 'bg-gray-100 text-gray-700';
+            const qChecked = u.access_quipper ? 'checked' : '';
+            const pChecked = u.access_phoenix ? 'checked' : '';
+            const isAdmin = u.role === 'admin';
+            let actions = '';
+            if (u.status === 'pending') {
+                actions = `<button onclick="approve('${u.id}')" class="px-3 py-1 bg-green-600 text-white rounded-md text-xs font-medium hover:bg-green-700">Approve</button>`;
+            } else if (u.status === 'approved' && !isAdmin) {
+                actions = `<button onclick="revoke('${u.id}')" class="px-3 py-1 bg-red-600 text-white rounded-md text-xs font-medium hover:bg-red-700">Revoke</button>`;
+            } else if (isAdmin) {
+                actions = '<span class="text-xs text-gray-400">Admin</span>';
+            }
+            return `<tr class="hover:bg-gray-50">
+                <td class="px-6 py-3 font-medium text-gray-900">${u.email}</td>
+                <td class="px-6 py-3"><span class="px-2 py-1 rounded-full text-xs font-medium ${color}">${u.status}</span></td>
+                <td class="px-6 py-3 text-gray-500">${u.role}</td>
+                <td class="px-6 py-3">
+                    <div class="flex items-center gap-3">
+                        <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" ${qChecked} ${isAdmin ? 'checked disabled' : ''} onchange="toggleAccess('${u.id}','quipper',this.checked)" class="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500">
+                            <span class="text-xs text-gray-600">Q</span>
+                        </label>
+                        <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" ${pChecked} ${isAdmin ? 'checked disabled' : ''} onchange="toggleAccess('${u.id}','phoenix',this.checked)" class="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500">
+                            <span class="text-xs text-gray-600">P</span>
+                        </label>
+                    </div>
+                </td>
+                <td class="px-6 py-3 text-gray-500">${u.created_at ? u.created_at.split('T')[0] : '—'}</td>
+                <td class="px-6 py-3 text-right">${actions}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    async function approve(id) {
+        if (!confirm('Approve this user?')) return;
+        const res = await api('/api/admin/approve', { method: 'POST', body: JSON.stringify({ id }) });
+        if (res && res.ok) loadData();
+    }
+
+    async function revoke(id) {
+        if (!confirm('Revoke this user\'s access?')) return;
+        const res = await api('/api/admin/revoke', { method: 'POST', body: JSON.stringify({ id }) });
+        if (res && res.ok) loadData();
+    }
+
+    async function toggleAccess(id, app, enabled) {
+        const res = await api('/api/admin/set-access', { method: 'POST', body: JSON.stringify({ id, app, enabled }) });
+        if (res && res.ok) loadData();
+    }
+
+    async function logout() {
+        await api('/api/auth/logout', { method: 'POST' });
+        window.location.href = '/auth/login.html';
+    }
+
+    loadData();
+    </script>
+</body>
+</html>

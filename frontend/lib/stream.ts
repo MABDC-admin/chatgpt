@@ -74,6 +74,7 @@ type StreamHandlers = {
   onStatus?: (message: string) => void;
   onImage?: (data: { url: string; caption: string; edited: boolean }) => void;
   onFile?: (data: { url: string; filename: string; caption: string }) => void;
+  onRatioPrompt?: (data: { options: string[]; labels: string[]; message: string }) => void;
   onDone?: (data: {
     conversation_id: string;
     prompt_tokens: number;
@@ -160,6 +161,7 @@ export async function streamChat(
 
       if (event === "start") handlers.onStart?.(payload);
       else if (event === "status") handlers.onStatus?.(payload.message ?? "");
+      else if (event === "ratio_prompt") handlers.onRatioPrompt?.(payload);
       else if (event === "image") handlers.onImage?.(payload);
       else if (event === "file") handlers.onFile?.(payload);
       else if (event === "delta") handlers.onDelta(payload.content ?? "");

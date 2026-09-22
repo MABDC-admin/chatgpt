@@ -110,16 +110,6 @@ export default function Sidebar({
         </div>
         {open && (
           <div className="flex items-center gap-1">
-            {onSelect && (
-              <button
-                onClick={() => onSelect(null)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700 transition-colors shadow-sm"
-                title="New chat"
-              >
-                <Plus className="h-4 w-4" />
-                <span className="hidden sm:inline">New chat</span>
-              </button>
-            )}
             <button
               onClick={() => setOpen(!open)}
               className="hidden md:inline-flex h-8 w-8 items-center justify-center rounded-md text-[#6b7280] hover:bg-emerald-50 hover:text-emerald-700 transition-colors"

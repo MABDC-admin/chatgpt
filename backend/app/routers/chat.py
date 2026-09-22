@@ -264,6 +264,7 @@ async def chat(
     # ------------------------------------------------------------------
     import re
     _PPT_PATTERNS = [
+        r"teacherdeck",
         r"(?:make|create|generate|build)\s+(?:a\s+|me\s+a\s+)?(?:ppt|pptx|powerpoint|presentation|slide\s*deck)",
         r"(?:ppt|pptx|powerpoint|presentation|slide\s*deck)\s+(?:about|on|for|of)",
         r"(?:need|want)\s+(?:a\s+)?(?:ppt|pptx|powerpoint|presentation)",
@@ -340,6 +341,31 @@ async def chat(
                 conversation_id=convo.id,
                 user_id=user.id,
                 image_model=payload.image_model,
+                title_from=payload.message if is_new_conversation else None,
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # AI-classifier document artifact intents (DOCX / PDF / XLSX).
+    # Delegated to _document_turn which shares the plan-build-save shape with
+    # _ppt_turn: LLM writes structured content, a deterministic renderer turns
+    # it into the artifact, and the file lands in the Files store.
+    if intent in (ai.INTENT_DOCX, ai.INTENT_PDF, ai.INTENT_XLSX):
+        user_content = payload.message
+        if attachments:
+            att_ids = [str(a.id) for a in attachments]
+            user_content = f"{payload.message}\n<!-- attachments: {json.dumps(att_ids)} -->"
+        db.add(Message(conversation_id=convo.id, role="user", content=user_content))
+        await db.commit()
+
+        return StreamingResponse(
+            _document_turn(
+                intent=intent,
+                user_message=payload.message,
+                attachments=attachments,
+                conversation_id=convo.id,
+                user_id=user.id,
                 title_from=payload.message if is_new_conversation else None,
             ),
             media_type="text/event-stream",
@@ -515,6 +541,8 @@ async def _persist_and_bill(
     images: int = 0,
     title_from: str | None = None,
     replace_message_id: uuid.UUID | None = None,
+    file_url: str | None = None,
+    file_name: str | None = None,
 ) -> None:
     """Store the assistant turn and charge for it.
 
@@ -528,6 +556,8 @@ async def _persist_and_bill(
                 role=role,
                 content=content,
                 image_url=image_url,
+                file_url=file_url,
+                file_name=file_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
@@ -651,6 +681,29 @@ async def _image_turn(
     title_from: str | None = None,
 ) -> AsyncIterator[str]:
     editing = intent == ai.INTENT_IMAGE_EDIT and bool(source_paths)
+
+    # When the user requests a new image but hasn't picked an aspect ratio,
+    # pause and ask them to choose one via inline buttons in the chat stream.
+    if not editing and not size:
+        yield _sse(
+            "start",
+            {
+                "conversation_id": str(conversation_id),
+                "model": imaging.default_model(model),
+                "kind": "ratio_prompt",
+            },
+        )
+        yield _sse(
+            "ratio_prompt",
+            {
+                "options": ["1024x1024", "1536x1024", "1024x1536"],
+                "labels": ["Square (1:1)", "Landscape (3:2)", "Portrait (2:3)"],
+                "message": "What aspect ratio would you like for this image?",
+            },
+        )
+        yield _sse("done", {"conversation_id": str(conversation_id), "cost_cents": 0})
+        return
+
     img_size, img_quality = imaging.normalise(size, quality)
     img_model = imaging.default_model(model)
 
@@ -888,6 +941,7 @@ async def _ppt_turn(
     user_id: uuid.UUID,
     image_model: str | None = None,
     title_from: str | None = None,
+    theme: str = "emerald",
 ) -> AsyncIterator[str]:
     """Three-phase PPT generation: plan → images → sandbox build.
 
@@ -896,6 +950,12 @@ async def _ppt_turn(
     layer (inner nginx, aaPanel HTTP/2 edge) times out the stream.
     """
     import asyncio as _asyncio
+    import re as _re
+
+    # Parse theme from TEACHERDECK structured input if present
+    theme_match = _re.search(r"Theme:\s*(\w+)", user_message, _re.IGNORECASE)
+    if theme_match:
+        theme = theme_match.group(1).lower()
 
     img_size, img_quality = imaging.normalise(None, None)
     img_model = imaging.default_model(image_model)
@@ -998,7 +1058,7 @@ async def _ppt_turn(
         # ---- Phase 3: Build PPTX ----
         status_events.append({"message": "Building your PowerPoint…"})
         try:
-            pptx_path = await pptgen.build_presentation(plan, image_paths, run_id)
+            pptx_path = await pptgen.build_presentation(plan, image_paths, run_id, theme)
         except Exception as exc:
             logger = __import__("logging").getLogger(__name__)
             logger.error("PPT build failed: %s\n%s", exc, __import__("traceback").format_exc())
@@ -1035,8 +1095,10 @@ async def _ppt_turn(
             result_box.update(error="Presentation built but could not be saved.", total_cost=total_cost)
             return
 
-        # Persist assistant message + bill
+        # Persist assistant message + bill. file_url is what keeps the
+        # download link visible after the streaming session ends.
         caption = f"Here is your {slide_count}-slide presentation."
+        _ppt_download_url = f"/api/files/download/{att_id}"
         await _persist_and_bill(
             conversation_id=conversation_id,
             user_id=user_id,
@@ -1049,6 +1111,8 @@ async def _ppt_turn(
             prompt_tokens=prompt_tokens_total,
             completion_tokens=completion_tokens_total,
             title_from=title_from,
+            file_url=_ppt_download_url,
+            file_name=pptx_name,
         )
 
         result_box.update(
@@ -1110,6 +1174,124 @@ async def _ppt_turn(
         "conversation_id": str(conversation_id),
         "cost_cents": total_cost,
     })
+
+
+async def _document_turn(
+    *,
+    intent: str,
+    user_message: str,
+    attachments: list[Attachment],
+    conversation_id: uuid.UUID,
+    user_id: uuid.UUID,
+    title_from: str | None = None,
+) -> AsyncIterator[str]:
+    """DOCX / PDF / XLSX artifact turn.
+
+    Mirrors _ppt_turn's shape: plan (LLM), build (deterministic renderer),
+    save (Attachment row), emit an SSE "file" event with a download URL. The
+    underlying planner writes Markdown (docx/pdf) or JSON (xlsx) so both
+    paths compose with the vision context the attachments carry.
+    """
+    from app.services import document_gen
+
+    kind_by_intent = {
+        ai.INTENT_DOCX: "docx",
+        ai.INTENT_PDF:  "pdf",
+        ai.INTENT_XLSX: "xlsx",
+    }
+    kind = kind_by_intent.get(intent, "docx")
+    label = kind.upper()
+
+    yield _sse("start", {
+        "conversation_id": str(conversation_id),
+        "kind": kind,
+        "model": settings.text_model,
+    })
+    yield _sse("status", {"message": f"Writing your {label}…"})
+
+    # Build the same multimodal user content the text turn would see, so an
+    # attached worksheet image or extracted PDF text reaches the planner.
+    user_content = _build_user_content(user_message, attachments)
+
+    # Image passthrough: "combine these into a PDF" / "put these in a Word
+    # doc" means the user wants the actual pixels on the page, not the LLM's
+    # transcription of them. Gate on both an unambiguous phrasing and the
+    # presence of at least one image attachment.
+    image_paths = [
+        Path(a.storage_path)
+        for a in attachments
+        if a.kind == "image" and a.storage_path
+    ]
+    passthrough_title = user_message.strip()[:60] or "Combined"
+
+    try:
+        if intent == ai.INTENT_XLSX:
+            data, filename = await document_gen.generate_xlsx(user_message, user_content)
+        elif intent == ai.INTENT_PDF:
+            if document_gen.wants_image_passthrough(user_message, image_paths):
+                yield _sse("status", {"message": f"Combining {len(image_paths)} image(s) into a PDF…"})
+                data, filename = document_gen.images_to_pdf(image_paths, passthrough_title)
+            else:
+                data, filename = await document_gen.generate_pdf(user_message, user_content)
+        else:
+            if document_gen.wants_image_passthrough(user_message, image_paths):
+                yield _sse("status", {"message": f"Combining {len(image_paths)} image(s) into a Word document…"})
+                data, filename = document_gen.images_to_docx(image_paths, passthrough_title)
+            else:
+                data, filename = await document_gen.generate_docx(user_message, user_content)
+    except Exception as exc:
+        yield _sse("error", {
+            "message": safe_message(exc, action=f"Building the {label}"),
+        })
+        yield _sse("done", {"conversation_id": str(conversation_id), "cost_cents": 0})
+        return
+
+    # Write file into the shared media store where PPT already lives.
+    docs_dir = Path("/data/documents")
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    out_path = docs_dir / f"{uuid.uuid4()}_{filename}"
+    out_path.write_bytes(data)
+
+    caption = f"Here is your {label}."
+    async with SessionLocal() as session:
+        att = Attachment(
+            user_id=user_id,
+            filename=filename,
+            mime_type=document_gen.ARTIFACT_MIME.get(kind, "application/octet-stream"),
+            kind=kind,
+            size_bytes=out_path.stat().st_size,
+            storage_path=str(out_path),
+            source_type="generated",
+            conversation_id=conversation_id,
+            original_filename=f"{label}: {user_message[:80]}",
+        )
+        session.add(att)
+        await session.flush()
+        att_id = att.id
+        await session.commit()
+
+    # Reuse the same persist+bill pipeline the other turns use so the
+    # assistant message, title-from and (eventually) usage row all land the
+    # same way. `_persist_and_bill` also handles title_from. Storing file_url
+    # on the row is what makes the download persistent -- without it the link
+    # is only visible during the streaming session.
+    download_url = f"/api/files/download/{att_id}"
+    await _persist_and_bill(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        role="assistant",
+        content=caption,
+        image_url=None,
+        kind="text",
+        model=settings.text_model,
+        cost_cents=0,
+        title_from=title_from,
+        file_url=download_url,
+        file_name=filename,
+    )
+
+    yield _sse("file", {"url": download_url, "filename": filename, "caption": caption})
+    yield _sse("done", {"conversation_id": str(conversation_id), "cost_cents": 0})
 
 
 def _data_url(path: Path, mime: str) -> str:

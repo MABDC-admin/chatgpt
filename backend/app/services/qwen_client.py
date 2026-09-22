@@ -167,14 +167,14 @@ def _model_id(requested: str) -> str:
 
 
 def _prompt_with_size(prompt: str, size: str) -> str:
-    """Nexum's Qwen path doesn't honour a top-level `size` parameter; the only
-    hook is the prompt itself. Steer the aspect ratio in-language so users get
-    what the picker promised them."""
+    """Prepend a strong directive about output dimensions so Qwen models
+    respect the requested orientation even when the native size parameter
+    isn't honoured by the router."""
     hint = {
-        "1024x1024": "square 1:1 composition, centered subject",
-        "1024x1536": "portrait 2:3 composition, taller than wide",
-        "1536x1024": "landscape 3:2 composition, wider than tall",
+        "1024x1024": "Generate a SQUARE image (1:1 aspect ratio).",
+        "1024x1536": "Generate a PORTRAIT image (2:3 aspect ratio, taller than wide).",
+        "1536x1024": "Generate a LANDSCAPE image (3:2 aspect ratio, wider than tall).",
     }.get(size, "")
     if not hint:
         return prompt
-    return f"{prompt.strip()}\n\n[Aspect: {hint}]"
+    return f"{hint}\n\n{prompt.strip()}"

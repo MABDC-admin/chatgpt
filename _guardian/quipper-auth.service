@@ -1,0 +1,16 @@
+[Unit]
+Description=Quipper Auth Microservice
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=www-data
+WorkingDirectory=/www/wwwroot/quipper.mabdc.com/_guardian
+ExecStart=/usr/bin/python3 -m uvicorn auth_service:app --host 127.0.0.1 --port 18900 --workers 2 --log-level info
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
